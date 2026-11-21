@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f766e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>جرد المخزون الاحترافي</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- مكتبات Excel والباركود بنسخ ثابتة من cdnjs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+
+  <!-- 1. شريط الإحصائيات الثابت أعلى الشاشة -->
+  <header class="sticky-header no-print">
+    <div class="top-title-row">
+      <div class="app-title">📦 جرد المخزون</div>
+      <div class="top-actions">
+        <button type="button" id="undoBtn" class="btn btn-secondary btn-sm" onclick="undoLastAction()" disabled>
+          ↩ تراجع
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
+          🗂️ السجل (<span id="historyCountBadge">0</span>)
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm" onclick="openModal('factoryProgressModal')">
+          📊 المصانع
+        </button>
+      </div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-box">
+        <span class="stat-num" id="statTotal">0</span>
+        <span class="stat-label">إجمالي الأصناف</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-num text-primary" id="statCounted">0</span>
+        <span class="stat-label">تم جرده</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-num text-warning" id="statDiff">0</span>
+        <span class="stat-label">فيه فروقات</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-num text-muted" id="statRemaining">0</span>
+        <span class="stat-label">المتبقي</span>
+      </div>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="overallProgressBar"></div>
+      </div>
+      <span class="progress-text" id="overallProgressText">0%</span>
+    </div>
+  </header>
+
+  <main class="container no-print">
+
+    <!-- 2. قسم رفع ملف السيستم والنسخ الاحتياطي والأرشفة -->
+    <details class="panel" id="importPanel" open>
+      <summary>📥 استيراد جرد السيستم والنسخ الاحتياطي</summary>
+      <div class="panel-body">
+        <div class="form-group">
+          <label class="field-label" for="fileInput">اختر ملف Excel (.xlsx / .xls) أو CSV:</label>
+          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+          <small class="hint-text">💡 عند رفع ملف جديد، يتم حفظ الجرد الحالي تلقائياً في "سجل الجرود" حتى لا يضيع.</small>
+        </div>
+
+        <div class="btn-grid-2" style="margin-top:10px;">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="archiveCurrentInventoryManual()">
+            📌 حفظ الجرد الحالي بالسجل
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="openHistoryModal()">
+            🗂️ فتح سجل الجرود السابقة
+          </button>
+        </div>
+
+        <hr class="divider" />
+
+        <div class="btn-grid-2">
+          <button type="button" class="btn btn-secondary btn-sm" onclick="exportFullBackupJSON()">
+            💾 تصدير نسخة احتياطية شاملة
+          </button>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('backupInput').click()">
+            📂 استعادة نسخة احتياطية
+          </button>
+          <input type="file" id="backupInput" accept=".json" style="display:none" />
+        </div>
+      </div>
+    </details>
+
+    <!-- 3. بيانات الجرد وأرقام الفواتير -->
+    <details class="panel">
+      <summary>🧾 بيانات الجرد وأرقام الفواتير</summary>
+      <div class="panel-body">
+        <div class="form-group">
+          <label class="field-label" for="inventoryTitle">اسم / عنوان الجرد (للتنظيم في السجل):</label>
+          <input type="text" id="inventoryTitle" placeholder="مثال: جرد مخزن المصنع - نوفمبر" />
+        </div>
+
+        <div class="form-group">
+          <label class="field-label" for="inventoryDate">تاريخ الجرد:</label>
+          <input type="date" id="inventoryDate" />
+          <label class="checkbox-row">
+            <input type="checkbox" id="includeDateInReport" checked />
+            <span>تسجيل التاريخ في التقارير المطبوعة والإكسل</span>
+          </label>
+        </div>
+
+        <div class="btn-grid-2">
+          <div class="form-group">
+            <label class="field-label" for="invPurchase">آخر فاتورة مشتريات:</label>
+            <input type="text" id="invPurchase" placeholder="رقم الفاتورة" />
+          </div>
+          <div class="form-group">
+            <label class="field-label" for="invPurchaseReturn">آخر مردود مشتريات:</label>
+            <input type="text" id="invPurchaseReturn" placeholder="رقم الفاتورة" />
+          </div>
+          <div class="form-group">
+            <label class="field-label" for="invSales">آخر فاتورة مبيعات:</label>
+            <input type="text" id="invSales" placeholder="رقم الفاتورة" />
+          </div>
+          <div class="form-group">
+            <label class="field-label" for="invSalesReturn">آخر مردود مبيعات:</label>
+            <input type="text" id="invSalesReturn" placeholder="رقم الفاتورة" />
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <!-- 4. الطباعة المباشرة A4 واستخراج تقارير Excel -->
+    <details class="panel">
+      <summary>🖨️ طباعة A4 واستخراج تقارير Excel</summary>
+      <div class="panel-body">
+        <div class="section-subtitle">🖨️ الطباعة المباشرة على ورق A4:</div>
+        <div class="btn-grid-2" style="margin-bottom:12px;">
+          <button type="button" class="btn btn-primary" onclick="printA4Report('all')">
+            🖨️ طباعة التقرير الكامل A4
+          </button>
+          <button type="button" class="btn btn-accent" onclick="printA4Report('diff')">
+            ⚠️ طباعة الفروقات فقط A4
+          </button>
+        </div>
+
+        <div class="section-subtitle">📊 تصدير ملفات Excel احترافية:</div>
+        <div class="stack-buttons">
+          <button type="button" class="btn btn-primary btn-block" onclick="exportMainExcelReport(false)">
+            📥 تحميل تقرير Excel الكامل (4 شيتات منظمة)
+          </button>
+
+          <button type="button" id="exportSelectedFactoryBtn" class="btn btn-accent btn-block" onclick="exportMainExcelReport(true)" disabled>
+            🏭 تقرير Excel لهذا المصنع فقط (اختر مصنعاً أولاً)
+          </button>
+
+          <button type="button" class="btn btn-secondary btn-block" onclick="exportPerFactoryExcel()">
+            📑 ملف Excel بشيت مستقل لكل مصنع + كل الفروقات
+          </button>
+
+          <hr class="divider" />
+
+          <button type="button" class="btn btn-danger btn-block" onclick="confirmResetAll()">
+            🗑️ أرشفة الحالي وبدء جرد جديد فارغ
+          </button>
+        </div>
+      </div>
+    </details>
+
+    <!-- 5. شريط البحث والفلترة والترتيب -->
+    <section class="filter-card">
+      <div class="search-row">
+        <input type="text" id="searchInput" placeholder="🔍 ابحث بكود الموديل (أو جزء منه)..." autocomplete="off" />
+        <button type="button" class="btn btn-primary" onclick="openBarcodeScanner()">
+          📷 باركود
+        </button>
+      </div>
+
+      <div class="status-pills" id="statusFilterGroup">
+        <button type="button" class="pill-btn active" data-status="all">الكل</button>
+        <button type="button" class="pill-btn" data-status="uncounted">لم يُجرد</button>
+        <button type="button" class="pill-btn" data-status="diff">فيه فرق</button>
+        <button type="button" class="pill-btn" data-status="match">مطابق</button>
+      </div>
+
+      <div class="btn-grid-2">
+        <select id="factoryFilter" aria-label="فلتر المصنع">
+          <option value="all">🏭 كل المصانع</option>
+        </select>
+        <select id="sortSelect" aria-label="ترتيب القائمة">
+          <option value="default">🔃 الترتيب الافتراضي</option>
+          <option value="uncounted_first">⏳ غير المجرود أولاً</option>
+          <option value="biggest_diff">⚠️ الأكبر فرقاً</option>
+          <option value="code_asc">🔤 حسب كود الموديل</option>
+        </select>
+      </div>
+    </section>
+
+    <!-- 6. قائمة الأصناف (كروت) -->
+    <section id="itemsContainer" class="items-list"></section>
+
+    <div id="loadMoreWrap" style="text-align:center; margin-top:14px; display:none;">
+      <button type="button" id="loadMoreBtn" class="btn btn-secondary btn-block" onclick="loadMoreItems()">
+        عرض المزيد...
+      </button>
+    </div>
+
+  </main>
+
+  <!-- شريط سفلي عائم -->
+  <div class="bottom-bar no-print">
+    <button type="button" class="btn btn-primary" style="flex:2;" onclick="openModal('addManualModal')">
+      ➕ إضافة صنف غير موجود بالسيستم
+    </button>
+    <button type="button" class="btn btn-secondary" style="flex:1;" onclick="window.scrollTo({top:0, behavior:'smooth'})">
+      ⬆️ للأعلى
+    </button>
+  </div>
+
+  <!-- حاوية الطباعة A4 -->
+  <div id="printArea" class="print-only"></div>
+
+  <!-- النوافذ المنبثقة (Modals) -->
+  <div class="modal-backdrop no-print" id="columnMappingModal">
+    <div class="modal-card">
+      <h3 class="modal-title">⚙️ ضبط أعمدة ملف السيستم</h3>
+      <div class="form-group">
+        <label class="field-label" for="mapCodeCol">عمود كود الموديل *</label>
+        <select id="mapCodeCol"></select>
+      </div>
+      <div class="form-group">
+        <label class="field-label" for="mapFactoryCol">عمود اسم المصنع *</label>
+        <select id="mapFactoryCol"></select>
+      </div>
+      <div class="form-group">
+        <label class="field-label" for="mapQtyCol">عمود كمية السيستم *</label>
+        <select id="mapQtyCol"></select>
+      </div>
+
+      <div id="duplicateOptionBox" class="alert-box" style="display:none;">
+        <strong id="duplicateMsg">تم اكتشاف أكواد مكررة!</strong>
+        <label class="radio-row">
+          <input type="radio" name="dupAction" value="merge" checked /> دمج المكرر (جمع كميات السيستم)
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="dupAction" value="keep" /> إبقاء كل صف كصنف منفصل
+        </label>
+      </div>
+
+      <div class="btn-grid-2">
+        <button type="button" class="btn btn-primary" onclick="confirmImportMapping()">✅ استيراد البيانات</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal('columnMappingModal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop no-print" id="historyModal">
+    <div class="modal-card modal-lg">
+      <h3 class="modal-title">🗂️ سجل الجرود السابقة (الهيستوري)</h3>
+      <p class="hint-text" style="margin-top:0;">
+        يمكنك استعادة أي جرد سابق للتعديل عليه، أو طباعته A4، أو سحبه Excel في أي وقت:
+      </p>
+      <div id="historyListContainer" class="history-list"></div>
+      <button type="button" class="btn btn-secondary btn-block" style="margin-top:14px;" onclick="closeModal('historyModal')">
+        إغلاق
+      </button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop no-print" id="addManualModal">
+    <div class="modal-card">
+      <h3 class="modal-title">➕ إضافة صنف غير موجود بالسيستم</h3>
+      <div class="form-group">
+        <label class="field-label" for="manualCodeInput">كود الموديل *</label>
+        <input type="text" id="manualCodeInput" dir="ltr" placeholder="مثال: PKG-205" />
+      </div>
+      <div class="form-group">
+        <label class="field-label" for="manualFactoryInput">اسم المصنع *</label>
+        <input type="text" id="manualFactoryInput" list="factoriesDatalist" placeholder="اختر أو اكتب اسم المصنع" />
+        <datalist id="factoriesDatalist"></datalist>
+      </div>
+      <div class="form-group">
+        <label class="field-label" for="manualActualInput">الكمية الفعلية الموجودة بالمخزن *</label>
+        <input type="text" inputmode="decimal" id="manualActualInput" placeholder="0" />
+      </div>
+      <div class="form-group">
+        <label class="field-label" for="manualNoteInput">ملحوظة (اختياري)</label>
+        <input type="text" id="manualNoteInput" placeholder="مثال: عبوات جديدة بدون كارت" />
+      </div>
+      <div class="btn-grid-2">
+        <button type="button" class="btn btn-primary" onclick="saveManualItem()">💾 حفظ الصنف</button>
+        <button type="button" class="btn btn-secondary" onclick="closeModal('addManualModal')">إلغاء</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop no-print" id="factoryProgressModal">
+    <div class="modal-card">
+      <h3 class="modal-title">📊 نسبة تقدم الجرد لكل مصنع</h3>
+      <div id="factoryProgressContainer" class="factory-progress-list"></div>
+      <button type="button" class="btn btn-secondary btn-block" style="margin-top:14px;" onclick="closeModal('factoryProgressModal')">
+        إغلاق
+      </button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop no-print" id="scannerModal">
+    <div class="modal-card">
+      <h3 class="modal-title">📷 مسح باركود الصنف</h3>
+      <p id="scannerStatusText" class="hint-text">وجّه الكاميرا نحو الباركود...</p>
+      <div id="scannerRegion">
+        <video id="nativeVideo" playsinline muted></video>
+        <div id="html5QrReader" style="width:100%;"></div>
+      </div>
+      <button type="button" class="btn btn-danger btn-block" style="margin-top:12px;" onclick="stopBarcodeScanner()">
+        إغلاق الكاميرا
+      </button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast no-print"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
